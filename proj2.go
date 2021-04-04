@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 
 	// Likewise, useful for debugging, etc.
-	"encoding/hex"
 
 	// The Datastore requires UUIDs to store key-value entries.
 	// See: https://cs161.org/assets/projects/2/docs/coding_tips/uuid.html.
@@ -32,42 +31,6 @@ import (
 	// see someUsefulThings() below:
 )
 
-// This serves two purposes:
-// a) It shows you some useful primitives, and
-// b) it suppresses warnings for items not being imported.
-// Of course, this function can be deleted.
-func someUsefulThings() {
-	// Creates a random UUID
-	f := uuid.New()
-	userlib.DebugMsg("UUID as string:%v", f.String())
-
-	// Example of writing over a byte of f
-	f[0] = 10
-	userlib.DebugMsg("UUID as string:%v", f.String())
-
-	// takes a sequence of bytes and renders as hex
-	h := hex.EncodeToString([]byte("fubar"))
-	userlib.DebugMsg("The hex: %v", h)
-
-	// Marshals data into a JSON representation
-	// Will actually work with go structures as well
-	d, _ := json.Marshal(f)
-	userlib.DebugMsg("The json data: %v", string(d))
-	var g uuid.UUID
-	json.Unmarshal(d, &g)
-	userlib.DebugMsg("Unmashaled data %v", g.String())
-
-	// This creates an error type
-	userlib.DebugMsg("Creation of error %v", errors.New(strings.ToTitle("This is an error")))
-
-	// And a random RSA key.  In this case, ignoring the error
-	// return value
-	var pk userlib.PKEEncKey
-	var sk userlib.PKEDecKey
-	pk, sk, _ = userlib.PKEKeyGen()
-	userlib.DebugMsg("Key is %v, %v", pk, sk)
-}
-
 // Helper function: Takes the first 16 bytes and converts it into the UUID type
 func bytesToUUID(data []byte) (ret uuid.UUID) {
 	for x := range ret {
@@ -76,25 +39,148 @@ func bytesToUUID(data []byte) (ret uuid.UUID) {
 	return
 }
 
+func bytesEqual(a, b []byte) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// Verify if user exists in the keystore
+func userExists(username string) bool {
+	_, vOk := userlib.KeystoreGet(username + "_v")
+	_, eOk := userlib.KeystoreGet(username + "_e")
+	return vOk || eOk
+}
+
+func deriveKeys(username string, password string) (SymKeyset, []byte) {
+	masterKey := userlib.Argon2Key([]byte(password), userlib.Hash([]byte(username)), 16)
+	eKey, _ := userlib.HashKDF(masterKey, []byte("encryption"))
+	mKey, _ := userlib.HashKDF(masterKey, []byte("mac"))
+	userSalt, _ := userlib.HashKDF(masterKey, []byte("userSalt"))
+
+	return SymKeyset{
+		EKey: eKey,
+		MKey: mKey,
+	}, userSalt
+}
+
+// Verifies that values encrypted by a stored public key can be decrypted by the given private key
+func verifyKeypairs(pubks PubKeyset, privks PrivKeyset) bool {
+	bytes := userlib.RandomBytes(256)
+	encrypted := PubEncrypt(pubks.EKey, privks.SKey, bytes)
+	dbytes, err := PubDecrypt(privks.DKey, pubks.VKey, encrypted)
+	if err != nil {
+		return false
+	}
+
+	return bytesEqual(bytes, dbytes)
+}
+
 // InitUser will be called a single time to initialize a new user.
 func InitUser(username string, password string) (userdataptr *User, err error) {
-	var userdata User
-	userdataptr = &userdata
+	if userExists(username) {
+		return nil, errors.New("username already exists")
+	}
 
-	//TODO: This is a toy implementation.
-	userdata.Username = username
-	//End of toy implementation
+	symKeys, userSalt := deriveKeys(username, password)
+	ePubKey, ePrivKey, _ := userlib.PKEKeyGen()
+	sPrivKey, sPubKey, _ := userlib.DSKeyGen()
 
-	return &userdata, nil
+	privKeyset := PrivKeyset{
+		DKey: ePrivKey,
+		SKey: sPrivKey,
+	}
+
+	privKeysetMarshalled, _ := json.Marshal(privKeyset)
+
+	ciphertext := symKeys.Encrypt(privKeysetMarshalled)
+
+	privKeyLocationMarshalled, _ := json.Marshal(PrivKeyLocationParams{
+		Username: username,
+		UserSalt: userSalt,
+	})
+
+	privKeyUUID, _ := uuid.FromBytes(userlib.Hash(privKeyLocationMarshalled))
+	userlib.DatastoreSet(privKeyUUID, ciphertext)
+
+	userlib.KeystoreSet(username+"_e", ePubKey)
+	userlib.KeystoreSet(username+"_v", sPubKey)
+
+	return &User{
+		Username: username,
+		SymKeys:  symKeys,
+		PrivKeys: privKeyset,
+		UserSalt: userSalt,
+	}, nil
 }
 
 // GetUser is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/getuser.html
 func GetUser(username string, password string) (userdataptr *User, err error) {
-	var userdata User
-	userdataptr = &userdata
+	// Check that user exists
+	if !userExists(username) {
+		return nil, errors.New("invalid credentials")
+	}
 
-	return userdataptr, nil
+	// Derive symmetric keys
+	symKeys, userSalt := deriveKeys(username, password)
+
+	// Fetch and decrypt private keys
+	privKeyLocationMarshalled, _ := json.Marshal(PrivKeyLocationParams{
+		Username: username,
+		UserSalt: userSalt,
+	})
+
+	privksUUID, _ := uuid.FromBytes(userlib.Hash(privKeyLocationMarshalled))
+	value, ok := userlib.DatastoreGet(privksUUID)
+
+	if !ok {
+		return nil, errors.New("invalid credentials")
+	}
+
+	plaintext, err := symKeys.Decrypt(value)
+	if err != nil {
+		return nil, errors.New("invalid credentials")
+	}
+
+	var privks PrivKeyset
+	json.Unmarshal(plaintext, &privks)
+
+	// Fetch public keys
+	var pubks PubKeyset
+	pubks.EKey, ok = userlib.KeystoreGet(username + "_e")
+	if !ok {
+		return nil, errors.New("invalid credentials")
+	}
+	pubks.VKey, ok = userlib.KeystoreGet(username + "_v")
+	if !ok {
+		return nil, errors.New("invalid credentials")
+	}
+
+	// Verify keys are correct
+	if !verifyKeypairs(pubks, privks) {
+		return nil, errors.New("invalid credentials")
+	}
+
+	// Build and return user struct
+	return &User{
+		Username: username,
+		SymKeys:  symKeys,
+		PrivKeys: privks,
+		UserSalt: userSalt,
+	}, nil
 }
 
 // StoreFile is documented at:

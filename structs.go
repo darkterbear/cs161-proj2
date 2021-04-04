@@ -120,10 +120,15 @@ type PrivKeyset struct {
 }
 
 type User struct {
-	Username     string
-	SymKeys      SymKeyset
-	PrivKeys     PrivKeyset
-	FileNameSalt []byte
+	Username string
+	SymKeys  SymKeyset
+	PrivKeys PrivKeyset
+	UserSalt []byte
+}
+
+type PrivKeyLocationParams struct {
+	Username string
+	UserSalt []byte
 }
 
 type FileMeta struct {
@@ -139,9 +144,9 @@ type RevocationNoticeLocationParams struct {
 }
 
 type UserFileDirectoryParams struct {
-	Username     string
-	Filename     string
-	FilenameSalt []byte
+	Username string
+	Filename string
+	UserSalt []byte
 }
 
 /*
@@ -198,9 +203,9 @@ func (fm FileMeta) RevocationCheck(u User) (bool, error) {
 		ciphertext := u.SymKeys.Encrypt(fmMarshalled)
 
 		userDirectoryParamsMarshalled, err := json.Marshal(UserFileDirectoryParams{
-			Username:     u.Username,
-			Filename:     fm.Filename,
-			FilenameSalt: u.FileNameSalt,
+			Username: u.Username,
+			Filename: fm.Filename,
+			UserSalt: u.UserSalt,
 		})
 
 		if err != nil {
