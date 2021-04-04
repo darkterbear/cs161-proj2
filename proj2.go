@@ -76,15 +76,6 @@ func bytesToUUID(data []byte) (ret uuid.UUID) {
 	return
 }
 
-// User is the structure definition for a user record.
-type User struct {
-	Username string
-
-	// You can add other fields here if you want...
-	// Note for JSON to marshal/unmarshal, the fields need to
-	// be public (start with a capital letter)
-}
-
 // InitUser will be called a single time to initialize a new user.
 func InitUser(username string, password string) (userdataptr *User, err error) {
 	var userdata User
