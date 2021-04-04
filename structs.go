@@ -6,7 +6,13 @@ import (
 	"log"
 
 	"github.com/cs161-staff/userlib"
+	"github.com/google/uuid"
 )
+
+type AuthenticatedConfidentialMsg struct {
+	Authentication []byte
+	Ciphertext     []byte
+}
 
 type SymKeyset struct {
 	EKey []byte // Encryption key
@@ -26,9 +32,9 @@ func (sks SymKeyset) Encrypt(plaintext []byte) []byte {
 		log.Fatal(err)
 	}
 
-	result, err := json.Marshal(map[string][]byte{
-		"mac":        mac,
-		"ciphertext": ciphertext,
+	result, err := json.Marshal(AuthenticatedConfidentialMsg{
+		Authentication: mac,
+		Ciphertext:     ciphertext,
 	})
 
 	if err != nil {
@@ -39,10 +45,10 @@ func (sks SymKeyset) Encrypt(plaintext []byte) []byte {
 }
 
 func (sks SymKeyset) Decrypt(r []byte) ([]byte, error) {
-	var result map[string][]byte
+	var result AuthenticatedConfidentialMsg
 	json.Unmarshal(r, &result)
 
-	mac, ciphertext := result["mac"], result["ciphertext"]
+	mac, ciphertext := result.Authentication, result.Ciphertext
 	compMac, err := userlib.HMACEval(sks.MKey, ciphertext)
 
 	if err != nil {
@@ -62,7 +68,7 @@ type PubKeyset struct {
 	VKey userlib.PublicKeyType // PKS verification key
 }
 
-func Encrypt(EKey userlib.PKEEncKey, SKey userlib.DSSignKey, plaintext []byte) []byte {
+func PubEncrypt(EKey userlib.PKEEncKey, SKey userlib.DSSignKey, plaintext []byte) []byte {
 	ciphertext, err := userlib.PKEEnc(EKey, plaintext)
 
 	if err != nil {
@@ -75,9 +81,9 @@ func Encrypt(EKey userlib.PKEEncKey, SKey userlib.DSSignKey, plaintext []byte) [
 		log.Fatal(err)
 	}
 
-	result, err := json.Marshal(map[string][]byte{
-		"signature":  signature,
-		"ciphertext": ciphertext,
+	result, err := json.Marshal(AuthenticatedConfidentialMsg{
+		Authentication: signature,
+		Ciphertext:     ciphertext,
 	})
 
 	if err != nil {
@@ -87,20 +93,22 @@ func Encrypt(EKey userlib.PKEEncKey, SKey userlib.DSSignKey, plaintext []byte) [
 	return result
 }
 
-func Decrypt(DKey userlib.PKEDecKey, VKey userlib.DSVerifyKey, r []byte) ([]byte, error) {
-	var result map[string][]byte
+func PubDecrypt(DKey userlib.PKEDecKey, VKey userlib.DSVerifyKey, r []byte) ([]byte, error) {
+	var result AuthenticatedConfidentialMsg
 	json.Unmarshal(r, &result)
 
-	signature, ciphertext := result["signature"], result["ciphertext"]
+	signature, ciphertext := result.Authentication, result.Ciphertext
 
+	// check signature associated with each piece of ciphertext
 	if userlib.DSVerify(VKey, ciphertext, signature) != nil {
 		return nil, errors.New("digital signature not valid for decryption")
 	}
 
 	plaintext, err := userlib.PKEDec(DKey, ciphertext)
 
+	// check if decryption worked properly
 	if err != nil {
-		log.Fatal(err)
+		return nil, errors.New("error attempting to decrypt ciphertext with PKE decryption key")
 	}
 
 	return plaintext, nil
@@ -120,13 +128,106 @@ type User struct {
 
 type FileMeta struct {
 	Owner       string
-	FilePointer []byte
-	NodePointer []byte
+	Filename    string
+	FilePointer Pointer
+	NodePointer Pointer
 }
 
-func (fm FileMeta) RevocationCheck(u User) bool {
-	// TODO: Implement
-	return false
+type RevocationNoticeLocationParams struct {
+	FileID   userlib.UUID
+	Username string
+}
+
+type UserFileDirectoryParams struct {
+	Username     string
+	Filename     string
+	FilenameSalt []byte
+}
+
+/*
+	The revocation check serves 2 purposes:
+	1. If the file has moved to another location and reencrypted due to someone else being revoked, update our file metadata with the new secure pointer.
+	2. Return whether or not we still have access to the file
+*/
+func (fm FileMeta) RevocationCheck(u User) (bool, error) {
+	paramsMarshalled, err := json.Marshal(RevocationNoticeLocationParams{
+		FileID:   fm.FilePointer.ID,
+		Username: u.Username,
+	})
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	revocationNoticeLocation, err := uuid.FromBytes(userlib.Hash(paramsMarshalled))
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	value, ok := userlib.DatastoreGet(revocationNoticeLocation)
+
+	if ok {
+		// There exists a revocation notice
+
+		// Get owner DS verification key
+		VKey, ok := userlib.KeystoreGet(fm.Owner + "_v")
+		if !ok {
+			return false, errors.New("cannot get verification key for file owner to verify revocation notice")
+		}
+
+		// Decrypt and verify revocation notice
+		plaintext, err := PubDecrypt(u.PrivKeys.DKey, VKey, value)
+
+		if err != nil {
+			return false, errors.New("failed to decrypt revocation notice")
+		}
+
+		var newFilePointer Pointer
+		json.Unmarshal(plaintext, &newFilePointer)
+
+		// Update this FileMeta's FilePointer
+		fm.FilePointer = newFilePointer
+
+		// Update stored directory entry
+		fmMarshalled, err := json.Marshal(fm)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		ciphertext := u.SymKeys.Encrypt(fmMarshalled)
+
+		userDirectoryParamsMarshalled, err := json.Marshal(UserFileDirectoryParams{
+			Username:     u.Username,
+			Filename:     fm.Filename,
+			FilenameSalt: u.FileNameSalt,
+		})
+
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		userDirectoryUUID, err := uuid.FromBytes(userlib.Hash(userDirectoryParamsMarshalled))
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		userlib.DatastoreSet(userDirectoryUUID, ciphertext)
+	}
+
+	// Check that we still have access
+	fileIDMarshalled, err := json.Marshal(fm.FilePointer.ID)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fileDataUUID, err := uuid.FromBytes(userlib.Hash(fileIDMarshalled))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, ok = userlib.DatastoreGet(fileDataUUID)
+	return ok, nil
 }
 
 type FileNode struct {
@@ -135,12 +236,25 @@ type FileNode struct {
 	ChildPointers []Pointer
 }
 
-func (fn FileNode) GetChildren() []FileNode {
-	// TODO: Implement
-	return []FileNode{}
+func (fn FileNode) GetChildren() ([]FileNode, error) {
+	children := []FileNode{}
+	for _, childPointer := range fn.ChildPointers {
+		encryptedFileNode, ok := userlib.DatastoreGet(childPointer.ID)
+		if !ok {
+			return nil, errors.New("failed to retrieve file node from pointer")
+		}
+		fileNode, err := childPointer.Keys.Decrypt(encryptedFileNode)
+		if err != nil {
+			return nil, errors.New("failed to decrypt file node")
+		}
+		var result FileNode
+		json.Unmarshal(fileNode, &result)
+		children = append(children, result)
+	}
+	return children, nil
 }
 
 type Pointer struct {
-	ID   []byte
+	ID   userlib.UUID
 	Keys SymKeyset
 }
