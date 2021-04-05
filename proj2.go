@@ -62,8 +62,8 @@ func deriveKeys(username string, password string) (SymKeyset, []byte) {
 	userSalt, _ := userlib.HashKDF(masterKey, []byte("userSalt"))
 
 	return SymKeyset{
-		EKey: eKey,
-		MKey: mKey,
+		EKey: eKey[:16],
+		MKey: mKey[:16],
 	}, userSalt
 }
 

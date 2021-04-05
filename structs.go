@@ -20,6 +20,8 @@ type SymKeyset struct {
 }
 
 func (sks SymKeyset) Encrypt(plaintext []byte) []byte {
+	// TODO: implement secure padding scheme (and in decrypt too); multiple of 16B block size
+
 	// Generate random IV
 	iv := userlib.RandomBytes(16)
 
