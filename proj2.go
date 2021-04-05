@@ -19,7 +19,6 @@ import (
 	"github.com/google/uuid"
 
 	// Useful for debug messages, or string manipulation for datastore keys.
-	"strings"
 
 	// Want to import errors.
 	"errors"
@@ -30,14 +29,6 @@ import (
 	// if you are looking for fmt, we don't give you fmt, but you can use userlib.DebugMsg.
 	// see someUsefulThings() below:
 )
-
-// Helper function: Takes the first 16 bytes and converts it into the UUID type
-func bytesToUUID(data []byte) (ret uuid.UUID) {
-	for x := range ret {
-		ret[x] = data[x]
-	}
-	return
-}
 
 func bytesEqual(a, b []byte) bool {
 	if (a == nil) != (b == nil) {
@@ -185,38 +176,234 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 
 // StoreFile is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/storefile.html
-func (userdata *User) StoreFile(filename string, data []byte) (err error) {
+func (u *User) StoreFile(filename string, data []byte) (err error) {
+	// Generate UUIDs and file keys
+	fileID := uuid.New()
+	nodeID := uuid.New()
 
-	//TODO: This is a toy implementation.
-	storageKey, _ := uuid.FromBytes([]byte(filename + userdata.Username)[:16])
-	jsonData, _ := json.Marshal(data)
-	userlib.DatastoreSet(storageKey, jsonData)
-	//End of toy implementation
+	fileSymKeyset := SymKeyset{
+		EKey: userlib.RandomBytes(16),
+		MKey: userlib.RandomBytes(16),
+	}
 
-	return
+	nodeSymKeyset := SymKeyset{
+		EKey: userlib.RandomBytes(16),
+		MKey: userlib.RandomBytes(16),
+	}
+
+	// Encrypt and save data
+	numChunksMarshalled, _ := json.Marshal(1)
+	numChunksEncrypted := fileSymKeyset.Encrypt(numChunksMarshalled)
+	fileIDMarshalled, _ := json.Marshal(fileID)
+	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled))
+
+	dataEncrypted := fileSymKeyset.Encrypt(data)
+	dataLocationMarshalled, _ := json.Marshal(FileChunkLocationParams{
+		FileID: fileID,
+		Chunk:  0,
+	})
+	dataLocationUUID, _ := uuid.FromBytes(dataLocationMarshalled)
+
+	userlib.DatastoreSet(fileChunksUUID, numChunksEncrypted)
+	userlib.DatastoreSet(dataLocationUUID, dataEncrypted)
+
+	filePointer := Pointer{
+		ID:   fileID,
+		Keys: fileSymKeyset,
+	}
+
+	// Create file share hierarchy (root node)
+	fileNodeMarshalled, _ := json.Marshal(FileNode{
+		Username:      u.Username,
+		IsRoot:        true,
+		ChildPointers: []Pointer{},
+	})
+	fileNodeEncrypted := nodeSymKeyset.Encrypt(fileNodeMarshalled)
+	userlib.DatastoreSet(nodeID, fileNodeEncrypted)
+
+	nodePointer := Pointer{
+		ID:   nodeID,
+		Keys: nodeSymKeyset,
+	}
+
+	// Create file directory entry for this user
+	fileMetaMarshalled, _ := json.Marshal(FileMeta{
+		Owner:       u.Username,
+		Filename:    filename,
+		FilePointer: filePointer,
+		NodePointer: nodePointer,
+	})
+	fileMetaEncrypted := u.SymKeys.Encrypt(fileMetaMarshalled)
+
+	fileDirectoryMarshalled, _ := json.Marshal(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: filename,
+		UserSalt: u.UserSalt,
+	})
+	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled))
+
+	userlib.DatastoreSet(fileDirectoryUUID, fileMetaEncrypted)
+
+	return nil
 }
 
 // AppendFile is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/appendfile.html
-func (userdata *User) AppendFile(filename string, data []byte) (err error) {
-	return
+func (u *User) AppendFile(filename string, data []byte) (err error) {
+	fileDirectoryMarshalled, _ := json.Marshal(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: filename,
+		UserSalt: u.UserSalt,
+	})
+	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled))
+	fileMetaEncrypted, ok := userlib.DatastoreGet(fileDirectoryUUID)
+
+	if !ok {
+		return errors.New("file not found")
+	}
+
+	fileMetaBytes, err := u.SymKeys.Decrypt(fileMetaEncrypted)
+
+	if err != nil {
+		return err
+	}
+
+	var fileMeta FileMeta
+	json.Unmarshal(fileMetaBytes, &fileMeta)
+
+	access, err := fileMeta.RevocationCheck(*u)
+	if !access {
+		return errors.New("you no longer have access to this file")
+	}
+
+	if err != nil {
+		return errors.New("cannot verify/decrypt revocation notice")
+	}
+
+	filePointer := fileMeta.FilePointer
+
+	// Get number of chunks
+	fileIDMarshalled, _ := json.Marshal(filePointer.ID)
+	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled))
+	numChunksEncrypted, ok := userlib.DatastoreGet(fileChunksUUID)
+
+	if !ok {
+		return errors.New("failed to retrieve num chunks")
+	}
+
+	fileChunksBytes, err := filePointer.Keys.Decrypt(numChunksEncrypted)
+
+	if err != nil {
+		return err
+	}
+
+	var numChunks int
+	json.Unmarshal(fileChunksBytes, &numChunks)
+
+	numChunks++
+
+	// Save new chunk count
+	numChunksMarshalled, _ := json.Marshal(numChunks)
+	numChunksEncrypted = filePointer.Keys.Encrypt(numChunksMarshalled)
+	userlib.DatastoreSet(fileChunksUUID, numChunksEncrypted)
+
+	// Save new chunk
+	dataEncrypted := filePointer.Keys.Encrypt(data)
+	dataLocationMarshalled, _ := json.Marshal(FileChunkLocationParams{
+		FileID: filePointer.ID,
+		Chunk:  numChunks - 1,
+	})
+	dataLocationUUID, _ := uuid.FromBytes(dataLocationMarshalled)
+
+	userlib.DatastoreSet(dataLocationUUID, dataEncrypted)
+
+	return nil
 }
 
 // LoadFile is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/loadfile.html
-func (userdata *User) LoadFile(filename string) (dataBytes []byte, err error) {
+func (u *User) LoadFile(filename string) (dataBytes []byte, err error) {
+	userFileDirectoryParamsMarshaled, _ := json.Marshal(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: filename,
+		UserSalt: u.UserSalt,
+	})
 
-	//TODO: This is a toy implementation.
-	storageKey, _ := uuid.FromBytes([]byte(filename + userdata.Username)[:16])
-	dataJSON, ok := userlib.DatastoreGet(storageKey)
+	userFileDirectoryParamsUUID, _ := uuid.FromBytes(userlib.Hash(userFileDirectoryParamsMarshaled))
+
+	// grab encrypted file metadata from the datastore
+	ciphertext, ok := userlib.DatastoreGet(userFileDirectoryParamsUUID)
+
 	if !ok {
-		return nil, errors.New(strings.ToTitle("File not found!"))
+		return nil, errors.New("failed to retrive file metadata")
 	}
-	json.Unmarshal(dataJSON, &dataBytes)
-	return dataBytes, nil
-	//End of toy implementation
 
-	return
+	plaintext, err := u.SymKeys.Decrypt(ciphertext)
+
+	if err != nil {
+		return nil, errors.New("failed to decrypt file metadata")
+	}
+
+	var fileMeta FileMeta
+	json.Unmarshal(plaintext, &fileMeta)
+
+	// check for file data access
+	access, err := fileMeta.RevocationCheck(*u)
+	if !access {
+		return nil, errors.New("you no longer have access to this file")
+	}
+
+	if err != nil {
+		return nil, errors.New("cannot verify/decrypt revocation notice")
+	}
+
+	filePointer := fileMeta.FilePointer
+	fileIDMarshalled, _ := json.Marshal(filePointer.ID)
+	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled))
+
+	// retrieve the number of file chunks from the datastore
+	numChunksEncrypted, ok := userlib.DatastoreGet(fileChunksUUID)
+
+	if !ok {
+		return nil, errors.New("failed to retrieve num chunks")
+	}
+
+	fileChunksBytes, err := filePointer.Keys.Decrypt(numChunksEncrypted)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var numChunks int
+	json.Unmarshal(fileChunksBytes, &numChunks)
+
+	fileData := []byte{}
+
+	for i := 0; i < numChunks; i++ {
+		dataLocationMarshalled, _ := json.Marshal(FileChunkLocationParams{
+			FileID: filePointer.ID,
+			Chunk:  i,
+		})
+		dataLocationUUID, _ := uuid.FromBytes(dataLocationMarshalled)
+
+		// retrieve the encrypted file chunk data from the datastore
+		ciphertext, ok := userlib.DatastoreGet(dataLocationUUID)
+
+		if !ok {
+			return nil, errors.New("failed to retrieve file chunk")
+		}
+
+		fileDataChunk, err := filePointer.Keys.Decrypt(ciphertext)
+
+		if err != nil {
+			return nil, err
+		}
+
+		// concat the file chunks
+		fileData = append(fileData, fileDataChunk...)
+	}
+
+	return fileData, nil
 }
 
 // ShareFile is documented at:

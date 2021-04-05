@@ -263,3 +263,8 @@ type Pointer struct {
 	ID   userlib.UUID
 	Keys SymKeyset
 }
+
+type FileChunkLocationParams struct {
+	FileID userlib.UUID
+	Chunk  int
+}
