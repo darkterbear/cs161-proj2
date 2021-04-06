@@ -19,8 +19,31 @@ type SymKeyset struct {
 	MKey []byte // MAC key
 }
 
+func pad(plaintext []byte) []byte {
+	blockSize := userlib.AESBlockSizeBytes
+	remainder := blockSize - len(plaintext)%blockSize
+	remainderFill := make([]byte, remainder)
+
+	adjustedPlaintext := append(plaintext, remainderFill...)
+
+	lastBlock := make([]byte, blockSize)
+	lastBlock[0] = byte(remainder)
+
+	adjustedPlaintext = append(adjustedPlaintext, lastBlock...)
+	return adjustedPlaintext
+}
+
+func depad(paddedPlaintext []byte) []byte {
+	blockSize := userlib.AESBlockSizeBytes
+	lastBlock := paddedPlaintext[len(paddedPlaintext)-blockSize:]
+	padSize := lastBlock[0]
+
+	return paddedPlaintext[:len(paddedPlaintext)-blockSize-int(padSize)]
+}
+
 func (sks SymKeyset) Encrypt(plaintext []byte) []byte {
-	// TODO: implement secure padding scheme (and in decrypt too); multiple of 16B block size
+	// Pad
+	plaintext = pad(plaintext)
 
 	// Generate random IV
 	iv := userlib.RandomBytes(16)
@@ -62,7 +85,7 @@ func (sks SymKeyset) Decrypt(r []byte) ([]byte, error) {
 		return nil, errors.New("HMAC corrupted in SymKey decrypt")
 	}
 
-	return userlib.SymDec(sks.EKey, ciphertext), nil
+	return depad(userlib.SymDec(sks.EKey, ciphertext)), nil
 }
 
 type PubKeyset struct {
@@ -166,7 +189,7 @@ func (fm FileMeta) RevocationCheck(u User) (bool, error) {
 		log.Fatal(err)
 	}
 
-	revocationNoticeLocation, err := uuid.FromBytes(userlib.Hash(paramsMarshalled))
+	revocationNoticeLocation, err := uuid.FromBytes(userlib.Hash(paramsMarshalled)[:16])
 
 	if err != nil {
 		log.Fatal(err)
@@ -214,7 +237,7 @@ func (fm FileMeta) RevocationCheck(u User) (bool, error) {
 			log.Fatal(err)
 		}
 
-		userDirectoryUUID, err := uuid.FromBytes(userlib.Hash(userDirectoryParamsMarshalled))
+		userDirectoryUUID, err := uuid.FromBytes(userlib.Hash(userDirectoryParamsMarshalled)[:16])
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -228,7 +251,7 @@ func (fm FileMeta) RevocationCheck(u User) (bool, error) {
 		log.Fatal(err)
 	}
 
-	fileDataUUID, err := uuid.FromBytes(userlib.Hash(fileIDMarshalled))
+	fileDataUUID, err := uuid.FromBytes(userlib.Hash(fileIDMarshalled)[:16])
 	if err != nil {
 		log.Fatal(err)
 	}

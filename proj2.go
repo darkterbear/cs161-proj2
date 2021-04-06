@@ -103,7 +103,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 		UserSalt: userSalt,
 	})
 
-	privKeyUUID, _ := uuid.FromBytes(userlib.Hash(privKeyLocationMarshalled))
+	privKeyUUID, _ := uuid.FromBytes(userlib.Hash(privKeyLocationMarshalled)[:16])
 	userlib.DatastoreSet(privKeyUUID, ciphertext)
 
 	userlib.KeystoreSet(username+"_e", ePubKey)
@@ -134,7 +134,7 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 		UserSalt: userSalt,
 	})
 
-	privksUUID, _ := uuid.FromBytes(userlib.Hash(privKeyLocationMarshalled))
+	privksUUID, _ := uuid.FromBytes(userlib.Hash(privKeyLocationMarshalled)[:16])
 	value, ok := userlib.DatastoreGet(privksUUID)
 
 	if !ok {
@@ -195,14 +195,14 @@ func (u *User) StoreFile(filename string, data []byte) (err error) {
 	numChunksMarshalled, _ := json.Marshal(1)
 	numChunksEncrypted := fileSymKeyset.Encrypt(numChunksMarshalled)
 	fileIDMarshalled, _ := json.Marshal(fileID)
-	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled))
+	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled)[:16])
 
 	dataEncrypted := fileSymKeyset.Encrypt(data)
 	dataLocationMarshalled, _ := json.Marshal(FileChunkLocationParams{
 		FileID: fileID,
 		Chunk:  0,
 	})
-	dataLocationUUID, _ := uuid.FromBytes(dataLocationMarshalled)
+	dataLocationUUID, _ := uuid.FromBytes(userlib.Hash(dataLocationMarshalled)[:16])
 
 	userlib.DatastoreSet(fileChunksUUID, numChunksEncrypted)
 	userlib.DatastoreSet(dataLocationUUID, dataEncrypted)
@@ -240,7 +240,7 @@ func (u *User) StoreFile(filename string, data []byte) (err error) {
 		Filename: filename,
 		UserSalt: u.UserSalt,
 	})
-	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled))
+	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled)[:16])
 
 	userlib.DatastoreSet(fileDirectoryUUID, fileMetaEncrypted)
 
@@ -255,7 +255,7 @@ func (u *User) AppendFile(filename string, data []byte) (err error) {
 		Filename: filename,
 		UserSalt: u.UserSalt,
 	})
-	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled))
+	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled)[:16])
 	fileMetaEncrypted, ok := userlib.DatastoreGet(fileDirectoryUUID)
 
 	if !ok {
@@ -284,7 +284,7 @@ func (u *User) AppendFile(filename string, data []byte) (err error) {
 
 	// Get number of chunks
 	fileIDMarshalled, _ := json.Marshal(filePointer.ID)
-	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled))
+	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled)[:16])
 	numChunksEncrypted, ok := userlib.DatastoreGet(fileChunksUUID)
 
 	if !ok {
@@ -313,7 +313,7 @@ func (u *User) AppendFile(filename string, data []byte) (err error) {
 		FileID: filePointer.ID,
 		Chunk:  numChunks - 1,
 	})
-	dataLocationUUID, _ := uuid.FromBytes(dataLocationMarshalled)
+	dataLocationUUID, _ := uuid.FromBytes(userlib.Hash(dataLocationMarshalled)[:16])
 
 	userlib.DatastoreSet(dataLocationUUID, dataEncrypted)
 
@@ -329,7 +329,7 @@ func (u *User) LoadFile(filename string) (dataBytes []byte, err error) {
 		UserSalt: u.UserSalt,
 	})
 
-	userFileDirectoryParamsUUID, _ := uuid.FromBytes(userlib.Hash(userFileDirectoryParamsMarshaled))
+	userFileDirectoryParamsUUID, _ := uuid.FromBytes(userlib.Hash(userFileDirectoryParamsMarshaled)[:16])
 
 	// grab encrypted file metadata from the datastore
 	ciphertext, ok := userlib.DatastoreGet(userFileDirectoryParamsUUID)
@@ -359,7 +359,7 @@ func (u *User) LoadFile(filename string) (dataBytes []byte, err error) {
 
 	filePointer := fileMeta.FilePointer
 	fileIDMarshalled, _ := json.Marshal(filePointer.ID)
-	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled))
+	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled)[:16])
 
 	// retrieve the number of file chunks from the datastore
 	numChunksEncrypted, ok := userlib.DatastoreGet(fileChunksUUID)
@@ -384,7 +384,7 @@ func (u *User) LoadFile(filename string) (dataBytes []byte, err error) {
 			FileID: filePointer.ID,
 			Chunk:  i,
 		})
-		dataLocationUUID, _ := uuid.FromBytes(dataLocationMarshalled)
+		dataLocationUUID, _ := uuid.FromBytes(userlib.Hash(dataLocationMarshalled)[:16])
 
 		// retrieve the encrypted file chunk data from the datastore
 		ciphertext, ok := userlib.DatastoreGet(dataLocationUUID)
