@@ -215,7 +215,6 @@ func (u *User) StoreFile(filename string, data []byte) (err error) {
 	// Create file share hierarchy (root node)
 	fileNodeMarshalled, _ := json.Marshal(FileNode{
 		Username:      u.Username,
-		IsRoot:        true,
 		ChildPointers: []Pointer{},
 	})
 	fileNodeEncrypted := nodeSymKeyset.Encrypt(fileNodeMarshalled)
@@ -408,16 +407,174 @@ func (u *User) LoadFile(filename string) (dataBytes []byte, err error) {
 
 // ShareFile is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/sharefile.html
-func (userdata *User) ShareFile(filename string, recipient string) (
+func (u *User) ShareFile(filename string, recipient string) (
 	accessToken uuid.UUID, err error) {
+	// Fetch file metadata
+	fileDirectoryMarshalled, _ := json.Marshal(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: filename,
+		UserSalt: u.UserSalt,
+	})
+	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled)[:16])
+	fileMetaEncrypted, ok := userlib.DatastoreGet(fileDirectoryUUID)
 
-	return
+	if !ok {
+		return uuid.Nil, errors.New("file not found")
+	}
+
+	fileMetaBytes, err := u.SymKeys.Decrypt(fileMetaEncrypted)
+
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	var fileMeta FileMeta
+	json.Unmarshal(fileMetaBytes, &fileMeta)
+
+	// Revocation check
+	access, err := fileMeta.RevocationCheck(*u)
+	if !access {
+		return uuid.Nil, errors.New("you no longer have access to this file")
+	}
+
+	if err != nil {
+		return uuid.Nil, errors.New("cannot verify/decrypt revocation notice")
+	}
+
+	// Get recipient public key
+	recipientEKey, ok := userlib.KeystoreGet(recipient + "_e")
+	if !ok {
+		return uuid.Nil, errors.New("cannot get recipient public key")
+	}
+
+	// Create child node in hierarchy
+	childUUID := uuid.New()
+	childSymKeyset := SymKeyset{
+		EKey: userlib.RandomBytes(16),
+		MKey: userlib.RandomBytes(16),
+	}
+
+	childNodeMarshalled, _ := json.Marshal(FileNode{
+		Username:      recipient,
+		ChildPointers: []Pointer{},
+	})
+	childNodeEncrypted := childSymKeyset.Encrypt(childNodeMarshalled)
+	userlib.DatastoreSet(childUUID, childNodeEncrypted)
+
+	// Add pointer from our node to new node
+	ourNodeEncrypted, ok := userlib.DatastoreGet(fileMeta.NodePointer.ID)
+	if !ok {
+		return uuid.Nil, errors.New("cannot access file share hierarchy")
+	}
+
+	ourNodeBytes, err := fileMeta.NodePointer.Keys.Decrypt(ourNodeEncrypted)
+	if err != nil {
+		return uuid.Nil, errors.New("cannot decrypt file share hierarchy")
+	}
+
+	var ourNode FileNode
+	json.Unmarshal(ourNodeBytes, &ourNode)
+
+	ourNode.ChildPointers = append(ourNode.ChildPointers, Pointer{
+		ID:   childUUID,
+		Keys: childSymKeyset,
+	})
+
+	ourNodeMarshalled, _ := json.Marshal(ourNode)
+	ourNodeEncrypted = fileMeta.NodePointer.Keys.Encrypt(ourNodeMarshalled)
+	userlib.DatastoreSet(fileMeta.NodePointer.ID, ourNodeEncrypted)
+
+	// Generate temp key, encrypted file meta, etc.
+	theirMeta := FileMeta{
+		Owner:       fileMeta.Owner,
+		Filename:    "",
+		FilePointer: fileMeta.FilePointer,
+		NodePointer: Pointer{
+			ID:   childUUID,
+			Keys: childSymKeyset,
+		},
+	}
+
+	tempKeyset := SymKeyset{
+		EKey: userlib.RandomBytes(16),
+		MKey: userlib.RandomBytes(16),
+	}
+
+	theirMetaMarshalled, _ := json.Marshal(theirMeta)
+	theirMetaEncrypted := tempKeyset.Encrypt(theirMetaMarshalled)
+	tempKeysetMarshalled, _ := json.Marshal(tempKeyset)
+	tempKeysetEncrypted := PubEncrypt(recipientEKey, u.PrivKeys.SKey, tempKeysetMarshalled)
+
+	accessInfoMarshalled, _ := json.Marshal(AccessTokenInfo{
+		SymKeyCipher:   tempKeysetEncrypted,
+		FileMetaCipher: theirMetaEncrypted,
+	})
+
+	accessTokenUUID := uuid.New()
+	userlib.DatastoreSet(accessTokenUUID, accessInfoMarshalled)
+
+	return accessTokenUUID, nil
 }
 
 // ReceiveFile is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/receivefile.html
-func (userdata *User) ReceiveFile(filename string, sender string,
+func (u *User) ReceiveFile(filename string, sender string,
 	accessToken uuid.UUID) error {
+
+	if !userExists(u.Username) {
+		return errors.New("invalid credentials")
+	}
+
+	// Get owner DS verification key
+	VKey, ok := userlib.KeystoreGet(sender + "_v")
+	if !ok {
+		return errors.New("cannot get verification key for file owner to verify revocation notice")
+	}
+
+	// Decrypt and verify access token info
+	accessTokenInfoBytes, ok := userlib.DatastoreGet(accessToken)
+
+	if !ok {
+		return errors.New("failed to retrive access token info")
+	}
+
+	var accessTokenInfo AccessTokenInfo
+	json.Unmarshal(accessTokenInfoBytes, &accessTokenInfo)
+
+	tempSymKeyBytes, err := PubDecrypt(u.PrivKeys.DKey, VKey, accessTokenInfo.SymKeyCipher)
+
+	var tempSymKey SymKeyset
+	json.Unmarshal(tempSymKeyBytes, &tempSymKey)
+
+	if err != nil {
+		return err
+	}
+
+	fileMetaBytes, err := tempSymKey.Decrypt(accessTokenInfo.FileMetaCipher)
+
+	if err != nil {
+		return err
+	}
+
+	var fileMeta FileMeta
+	json.Unmarshal(fileMetaBytes, &fileMeta)
+
+	// Update file directory entry for this user
+	fileMeta.Filename = filename
+
+	fileMetaMarshalled, _ := json.Marshal(fileMeta)
+
+	fileMetaEncrypted := u.SymKeys.Encrypt(fileMetaMarshalled)
+
+	fileDirectoryMarshalled, _ := json.Marshal(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: filename,
+		UserSalt: u.UserSalt,
+	})
+	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled)[:16])
+
+	userlib.DatastoreSet(fileDirectoryUUID, fileMetaEncrypted)
+
 	return nil
 }
 

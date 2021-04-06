@@ -174,6 +174,11 @@ type UserFileDirectoryParams struct {
 	UserSalt []byte
 }
 
+type AccessTokenInfo struct {
+	SymKeyCipher   []byte
+	FileMetaCipher []byte
+}
+
 /*
 	The revocation check serves 2 purposes:
 	1. If the file has moved to another location and reencrypted due to someone else being revoked, update our file metadata with the new secure pointer.
@@ -262,7 +267,6 @@ func (fm FileMeta) RevocationCheck(u User) (bool, error) {
 
 type FileNode struct {
 	Username      string
-	IsRoot        bool
 	ChildPointers []Pointer
 }
 
