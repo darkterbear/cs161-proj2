@@ -580,6 +580,193 @@ func (u *User) ReceiveFile(filename string, sender string,
 
 // RevokeFile is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/revokefile.html
-func (userdata *User) RevokeFile(filename string, targetUsername string) (err error) {
-	return
+func (u *User) RevokeFile(filename string, targetUsername string) (err error) {
+	// Fetch file metadata
+	fileDirectoryMarshalled, _ := json.Marshal(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: filename,
+		UserSalt: u.UserSalt,
+	})
+	fileDirectoryUUID, _ := uuid.FromBytes(userlib.Hash(fileDirectoryMarshalled)[:16])
+	fileMetaEncrypted, ok := userlib.DatastoreGet(fileDirectoryUUID)
+
+	if !ok {
+		return errors.New("file not found")
+	}
+
+	fileMetaBytes, err := u.SymKeys.Decrypt(fileMetaEncrypted)
+
+	if err != nil {
+		return err
+	}
+
+	var fileMeta FileMeta
+	json.Unmarshal(fileMetaBytes, &fileMeta)
+
+	// Revocation check
+	access, err := fileMeta.RevocationCheck(*u)
+	if !access {
+		return errors.New("you no longer have access to this file")
+	}
+
+	if err != nil {
+		return errors.New("cannot verify/decrypt revocation notice")
+	}
+
+	// Check that we are owner
+	if fileMeta.Owner != u.Username {
+		return errors.New("non-owner user trying to revoke file access")
+	}
+
+	filePointer := fileMeta.FilePointer
+
+	// Read and write to new location
+	fileIDMarshalled, _ := json.Marshal(filePointer.ID)
+	fileChunksUUID, _ := uuid.FromBytes(userlib.Hash(fileIDMarshalled)[:16])
+
+	// retrieve the number of file chunks from the datastore
+	numChunksEncrypted, ok := userlib.DatastoreGet(fileChunksUUID)
+
+	if !ok {
+		return errors.New("failed to retrieve num chunks")
+	}
+
+	fileChunksBytes, err := filePointer.Keys.Decrypt(numChunksEncrypted)
+
+	if err != nil {
+		return err
+	}
+
+	var numChunks int
+	json.Unmarshal(fileChunksBytes, &numChunks)
+
+	// delete the old number of file chunks from the datastore
+	userlib.DatastoreDelete(fileChunksUUID)
+
+	fileData := []byte{}
+
+	// delete the old file chunks while compressing the file data into new array
+	for i := 0; i < numChunks; i++ {
+		dataLocationMarshalled, _ := json.Marshal(FileChunkLocationParams{
+			FileID: filePointer.ID,
+			Chunk:  i,
+		})
+		dataLocationUUID, _ := uuid.FromBytes(userlib.Hash(dataLocationMarshalled)[:16])
+
+		// retrieve the encrypted file chunk data from the datastore
+		ciphertext, ok := userlib.DatastoreGet(dataLocationUUID)
+
+		if !ok {
+			return errors.New("failed to retrieve file chunk")
+		}
+
+		fileDataChunk, err := filePointer.Keys.Decrypt(ciphertext)
+
+		if err != nil {
+			return err
+		}
+
+		// concat the file chunks
+		fileData = append(fileData, fileDataChunk...)
+
+		// clear the existing data at the old location
+		userlib.DatastoreDelete(dataLocationUUID)
+	}
+
+	// Generate new file Pointer
+	newFileID := uuid.New()
+	newSymKeySet := SymKeyset{
+		EKey: userlib.RandomBytes(16),
+		MKey: userlib.RandomBytes(16),
+	}
+
+	newPointer := Pointer{
+		ID:   newFileID,
+		Keys: newSymKeySet,
+	}
+
+	// store all chunks as a single chunk (may approach this again later)
+	newNumChunksMarshalled, _ := json.Marshal(1)
+	newNumChunksEncrypted := newSymKeySet.Encrypt(newNumChunksMarshalled)
+	newFileIDMarshalled, _ := json.Marshal(newFileID)
+
+	newDataEncrypted := newSymKeySet.Encrypt(fileData)
+	newDataLocationMarshalled, _ := json.Marshal(FileChunkLocationParams{
+		FileID: newFileID,
+		Chunk:  0,
+	})
+
+	newFileChunksUUID, _ := uuid.FromBytes(userlib.Hash(newFileIDMarshalled)[:16])
+	newDataLocationUUID, _ := uuid.FromBytes(userlib.Hash(newDataLocationMarshalled)[:16])
+
+	userlib.DatastoreSet(newFileChunksUUID, newNumChunksEncrypted)
+	userlib.DatastoreSet(newDataLocationUUID, newDataEncrypted)
+
+	// Create revocation notices by traversing hierarchy
+	newPointerBytes, _ := json.Marshal(newPointer)
+	createRevocationNotice(newPointerBytes, filePointer.ID, fileMeta.NodePointer, u.PrivKeys.SKey, targetUsername)
+
+	return nil
+}
+
+// Recursively create revocation notices for all users on the hierarchy EXCEPT for revokedUsername
+// Returns whether or not the node pointed to should still remain in the hierarchy; if false, should be pruned
+func createRevocationNotice(
+	newFilePointerBytes []byte,
+	oldFileID uuid.UUID,
+	fileNodePointer Pointer,
+	signingKey userlib.PrivateKeyType,
+	revokedUsername string) (bool, error) {
+	// Decrypt the file node pointer to a file node
+	fileNodeEncrypted, ok := userlib.DatastoreGet(fileNodePointer.ID)
+	if !ok {
+		return false, errors.New("can't find file node")
+	}
+
+	fileNodeBytes, err := fileNodePointer.Keys.Decrypt(fileNodeEncrypted)
+	if err != nil {
+		return false, err
+	}
+
+	var fileNode FileNode
+	json.Unmarshal(fileNodeBytes, &fileNode)
+
+	// Check the user corresponding to this node should have access revoked
+	if fileNode.Username == revokedUsername {
+		return false, nil
+	}
+
+	// Create a revocation notice for this node's corresponding user
+	revocationNoticeLocationMarshalled, _ := json.Marshal(RevocationNoticeLocationParams{
+		FileID:   oldFileID,
+		Username: fileNode.Username,
+	})
+	revocationNoticeUUID, _ := uuid.FromBytes(userlib.Hash(revocationNoticeLocationMarshalled)[:16])
+
+	EKey, ok := userlib.KeystoreGet(fileNode.Username)
+	if !ok {
+		return false, errors.New("can't find pubkey of user to create revocation notice")
+	}
+
+	userlib.DatastoreSet(revocationNoticeUUID, PubEncrypt(EKey, signingKey, newFilePointerBytes))
+
+	// Recurse on children; iterate through list backwards so we can delete children as we go w/o worry
+	for i := len(fileNode.ChildPointers) - 1; i >= 0; i-- {
+		keep, err := createRevocationNotice(newFilePointerBytes, oldFileID, fileNode.ChildPointers[i], signingKey, revokedUsername)
+		if err != nil {
+			return false, err
+		}
+
+		if !keep {
+			// Remove this child from child pointers
+			fileNode.ChildPointers = append(fileNode.ChildPointers[:i], fileNode.ChildPointers[i+1:]...)
+		}
+	}
+
+	// Update fileNode
+	fileNodeMarshalled, _ := json.Marshal(fileNode)
+	fileNodeEncrypted = fileNodePointer.Keys.Encrypt(fileNodeMarshalled)
+	userlib.DatastoreSet(fileNodePointer.ID, fileNodeEncrypted)
+
+	return true, nil
 }
