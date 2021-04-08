@@ -230,7 +230,10 @@ func TestRevoke(t *testing.T) {
 	}
 
 	// Test revoke file1 from Bob
-	u.RevokeFile("file1", "bob")
+	err = u.RevokeFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to revoke file from bob", err)
+	}
 
 	// Test load file1 after revoke
 

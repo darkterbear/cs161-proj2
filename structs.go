@@ -184,7 +184,7 @@ type AccessTokenInfo struct {
 	1. If the file has moved to another location and reencrypted due to someone else being revoked, update our file metadata with the new secure pointer.
 	2. Return whether or not we still have access to the file
 */
-func (fm FileMeta) RevocationCheck(u User) (bool, error) {
+func (fm *FileMeta) RevocationCheck(u User) (bool, error) {
 	paramsMarshalled, err := json.Marshal(RevocationNoticeLocationParams{
 		FileID:   fm.FilePointer.ID,
 		Username: u.Username,

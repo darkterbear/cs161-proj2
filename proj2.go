@@ -704,7 +704,11 @@ func (u *User) RevokeFile(filename string, targetUsername string) (err error) {
 
 	// Create revocation notices by traversing hierarchy
 	newPointerBytes, _ := json.Marshal(newPointer)
-	createRevocationNotice(newPointerBytes, filePointer.ID, fileMeta.NodePointer, u.PrivKeys.SKey, targetUsername)
+	_, err = createRevocationNotice(newPointerBytes, filePointer.ID, fileMeta.NodePointer, u.PrivKeys.SKey, targetUsername)
+
+	if err != nil {
+		return errors.New("failed to create revocation notices")
+	}
 
 	return nil
 }
@@ -743,7 +747,7 @@ func createRevocationNotice(
 	})
 	revocationNoticeUUID, _ := uuid.FromBytes(userlib.Hash(revocationNoticeLocationMarshalled)[:16])
 
-	EKey, ok := userlib.KeystoreGet(fileNode.Username)
+	EKey, ok := userlib.KeystoreGet(fileNode.Username + "_e")
 	if !ok {
 		return false, errors.New("can't find pubkey of user to create revocation notice")
 	}
