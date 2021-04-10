@@ -75,19 +75,12 @@ func (sks SymKeyset) Encrypt(plaintext []byte) []byte {
 	ciphertext := userlib.SymEnc(sks.EKey, iv, plaintext)
 
 	// MAC (64 bytes)
-	mac, err := userlib.HMACEval(sks.MKey, ciphertext)
-	if err != nil {
-		log.Fatal(err)
-	}
+	mac, _ := userlib.HMACEval(sks.MKey, ciphertext)
 
-	result, err := json.Marshal(AuthenticatedConfidentialMsg{
+	result, _ := json.Marshal(AuthenticatedConfidentialMsg{
 		Authentication: mac,
 		Ciphertext:     ciphertext,
 	})
-
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	return result
 }
@@ -97,11 +90,7 @@ func (sks SymKeyset) Decrypt(r []byte) ([]byte, error) {
 	json.Unmarshal(r, &result)
 
 	mac, ciphertext := result.Authentication, result.Ciphertext
-	compMac, err := userlib.HMACEval(sks.MKey, ciphertext)
-
-	if err != nil {
-		log.Fatal(err)
-	}
+	compMac, _ := userlib.HMACEval(sks.MKey, ciphertext)
 
 	if !userlib.HMACEqual(compMac, mac) {
 		// HMAC does not match the given ciphertext
@@ -116,29 +105,25 @@ type PubKeyset struct {
 	VKey userlib.PublicKeyType // PKS verification key
 }
 
-func PubEncrypt(EKey userlib.PKEEncKey, SKey userlib.DSSignKey, plaintext []byte) []byte {
+func PubEncrypt(EKey userlib.PKEEncKey, SKey userlib.DSSignKey, plaintext []byte) ([]byte, error) {
 	ciphertext, err := userlib.PKEEnc(EKey, plaintext)
 
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	signature, err := userlib.DSSign(SKey, ciphertext)
 
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
-	result, err := json.Marshal(AuthenticatedConfidentialMsg{
+	result, _ := json.Marshal(AuthenticatedConfidentialMsg{
 		Authentication: signature,
 		Ciphertext:     ciphertext,
 	})
 
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return result
+	return result, nil
 }
 
 func PubDecrypt(DKey userlib.PKEDecKey, VKey userlib.DSVerifyKey, r []byte) ([]byte, error) {
@@ -328,7 +313,11 @@ func deriveKeys(username string, password string) (SymKeyset, []byte) {
 // Verifies that values encrypted by a stored public key can be decrypted by the given private key
 func verifyKeypairs(pubks PubKeyset, privks PrivKeyset) bool {
 	bytes := userlib.RandomBytes(256)
-	encrypted := PubEncrypt(pubks.EKey, privks.SKey, bytes)
+	encrypted, err := PubEncrypt(pubks.EKey, privks.SKey, bytes)
+	if err != nil {
+		return false
+	}
+
 	dbytes, err := PubDecrypt(privks.DKey, pubks.VKey, encrypted)
 	if err != nil {
 		return false
@@ -768,7 +757,11 @@ func (u *User) ShareFile(filename string, recipient string) (
 
 	theirMetaEncrypted := encryptStruct(theirMeta, tempKeyset)
 	tempKeysetMarshalled, _ := json.Marshal(tempKeyset)
-	tempKeysetEncrypted := PubEncrypt(recipientEKey, u.PrivKeys.SKey, tempKeysetMarshalled)
+	tempKeysetEncrypted, err := PubEncrypt(recipientEKey, u.PrivKeys.SKey, tempKeysetMarshalled)
+
+	if err != nil {
+		return uuid.Nil, err
+	}
 
 	accessInfoMarshalled, _ := json.Marshal(AccessTokenInfo{
 		SymKeyCipher:   tempKeysetEncrypted,
@@ -1007,7 +1000,12 @@ func createRevocationNotice(
 		return false, errors.New("can't find pubkey of user to create revocation notice")
 	}
 
-	userlib.DatastoreSet(revocationNoticeUUID, PubEncrypt(EKey, signingKey, newFilePointerBytes))
+	ciphertext, err := PubEncrypt(EKey, signingKey, newFilePointerBytes)
+	if err != nil {
+		return false, err
+	}
+
+	userlib.DatastoreSet(revocationNoticeUUID, ciphertext)
 
 	// Recurse on children; iterate through list backwards so we can delete children as we go w/o worry
 	for i := len(fileNode.ChildPointers) - 1; i >= 0; i-- {
