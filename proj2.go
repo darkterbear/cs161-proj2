@@ -208,20 +208,10 @@ type AccessTokenInfo struct {
 	2. Return whether or not we still have access to the file
 */
 func (fm *FileMeta) RevocationCheck(u User) (bool, error) {
-	paramsMarshalled, err := json.Marshal(RevocationNoticeLocationParams{
+	revocationNoticeLocation := toUUID(RevocationNoticeLocationParams{
 		FileID:   fm.FilePointer.ID,
 		Username: u.Username,
 	})
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	revocationNoticeLocation, err := uuid.FromBytes(userlib.Hash(paramsMarshalled)[:16])
-
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	value, ok := userlib.DatastoreGet(revocationNoticeLocation)
 
@@ -248,42 +238,19 @@ func (fm *FileMeta) RevocationCheck(u User) (bool, error) {
 		fm.FilePointer = newFilePointer
 
 		// Update stored directory entry
-		fmMarshalled, err := json.Marshal(fm)
-		if err != nil {
-			log.Fatal(err)
-		}
+		ciphertext := encryptStruct(fm, u.SymKeys)
 
-		ciphertext := u.SymKeys.Encrypt(fmMarshalled)
-
-		userDirectoryParamsMarshalled, err := json.Marshal(UserFileDirectoryParams{
+		userDirectoryUUID := toUUID(UserFileDirectoryParams{
 			Username: u.Username,
 			Filename: fm.Filename,
 			UserSalt: u.UserSalt,
 		})
 
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		userDirectoryUUID, err := uuid.FromBytes(userlib.Hash(userDirectoryParamsMarshalled)[:16])
-		if err != nil {
-			log.Fatal(err)
-		}
-
 		userlib.DatastoreSet(userDirectoryUUID, ciphertext)
 	}
 
 	// Check that we still have access
-	fileIDMarshalled, err := json.Marshal(fm.FilePointer.ID)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fileDataUUID, err := uuid.FromBytes(userlib.Hash(fileIDMarshalled)[:16])
-	if err != nil {
-		log.Fatal(err)
-	}
-
+	fileDataUUID := toUUID(fm.FilePointer.ID)
 	_, ok = userlib.DatastoreGet(fileDataUUID)
 	return ok, nil
 }
