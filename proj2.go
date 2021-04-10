@@ -250,12 +250,13 @@ func (fn FileNode) GetChildren() ([]FileNode, error) {
 		if !ok {
 			return nil, errors.New("failed to retrieve file node from pointer")
 		}
-		fileNode, err := childPointer.Keys.Decrypt(encryptedFileNode)
+
+		var result FileNode
+		err := decryptToStruct(encryptedFileNode, childPointer.Keys, &result)
 		if err != nil {
 			return nil, errors.New("failed to decrypt file node")
 		}
-		var result FileNode
-		json.Unmarshal(fileNode, &result)
+
 		children = append(children, result)
 	}
 	return children, nil
@@ -310,7 +311,7 @@ func deriveKeys(username string, password string) (SymKeyset, []byte) {
 
 // Verifies that values encrypted by a stored public key can be decrypted by the given private key
 func verifyKeypairs(pubks PubKeyset, privks PrivKeyset) bool {
-	bytes := userlib.RandomBytes(256)
+	bytes := userlib.RandomBytes(120)
 	encrypted, err := PubEncrypt(pubks.EKey, privks.SKey, bytes)
 	if err != nil {
 		return false
@@ -335,6 +336,16 @@ func encryptStruct(obj interface{}, symKeys SymKeyset) []byte {
 	objMarshalled, _ := json.Marshal(obj)
 	ciphertext := symKeys.Encrypt(objMarshalled)
 	return ciphertext
+}
+
+func decryptToStruct(ciphertext []byte, symKeys SymKeyset, s interface{}) error {
+	plaintext, err := symKeys.Decrypt(ciphertext)
+	if err != nil {
+		return err
+	}
+
+	json.Unmarshal(plaintext, s)
+	return nil
 }
 
 // InitUser will be called a single time to initialize a new user.
@@ -376,7 +387,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 func GetUser(username string, password string) (userdataptr *User, err error) {
 	// Check that user exists
 	if !userExists(username) {
-		return nil, errors.New("invalid credentials")
+		return nil, errors.New("invalid credentials (username)")
 	}
 
 	// Derive symmetric keys
@@ -390,31 +401,29 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	value, ok := userlib.DatastoreGet(privksUUID)
 
 	if !ok {
-		return nil, errors.New("invalid credentials")
-	}
-
-	plaintext, err := symKeys.Decrypt(value)
-	if err != nil {
-		return nil, errors.New("invalid credentials")
+		return nil, errors.New("invalid credentials (cant find stored private keys)")
 	}
 
 	var privks PrivKeyset
-	json.Unmarshal(plaintext, &privks)
+	err = decryptToStruct(value, symKeys, &privks)
+	if err != nil {
+		return nil, err
+	}
 
 	// Fetch public keys
 	var pubks PubKeyset
 	pubks.EKey, ok = userlib.KeystoreGet(username + "_e")
 	if !ok {
-		return nil, errors.New("invalid credentials")
+		return nil, errors.New("invalid credentials (invalid pubkey)")
 	}
 	pubks.VKey, ok = userlib.KeystoreGet(username + "_v")
 	if !ok {
-		return nil, errors.New("invalid credentials")
+		return nil, errors.New("invalid credentials (invalid pubkey)")
 	}
 
 	// Verify keys are correct
 	if !verifyKeypairs(pubks, privks) {
-		return nil, errors.New("invalid credentials")
+		return nil, errors.New("invalid credentials (password wrong)")
 	}
 
 	// Build and return user struct
@@ -512,14 +521,11 @@ func (u *User) AppendFile(filename string, data []byte) (err error) {
 		return errors.New("file not found")
 	}
 
-	fileMetaBytes, err := u.SymKeys.Decrypt(fileMetaEncrypted)
-
+	var fileMeta FileMeta
+	err = decryptToStruct(fileMetaEncrypted, u.SymKeys, &fileMeta)
 	if err != nil {
 		return err
 	}
-
-	var fileMeta FileMeta
-	json.Unmarshal(fileMetaBytes, &fileMeta)
 
 	access, err := fileMeta.RevocationCheck(*u)
 	if !access {
@@ -540,14 +546,11 @@ func (u *User) AppendFile(filename string, data []byte) (err error) {
 		return errors.New("failed to retrieve num chunks")
 	}
 
-	fileChunksBytes, err := filePointer.Keys.Decrypt(numChunksEncrypted)
-
+	var numChunks int
+	err = decryptToStruct(numChunksEncrypted, filePointer.Keys, &numChunks)
 	if err != nil {
 		return err
 	}
-
-	var numChunks int
-	json.Unmarshal(fileChunksBytes, &numChunks)
 
 	numChunks++
 
@@ -584,14 +587,11 @@ func (u *User) LoadFile(filename string) (dataBytes []byte, err error) {
 		return nil, errors.New("failed to retrive file metadata")
 	}
 
-	plaintext, err := u.SymKeys.Decrypt(ciphertext)
-
-	if err != nil {
-		return nil, errors.New("failed to decrypt file metadata")
-	}
-
 	var fileMeta FileMeta
-	json.Unmarshal(plaintext, &fileMeta)
+	err = decryptToStruct(ciphertext, u.SymKeys, &fileMeta)
+	if err != nil {
+		return nil, err
+	}
 
 	// check for file data access
 	access, err := fileMeta.RevocationCheck(*u)
@@ -613,14 +613,11 @@ func (u *User) LoadFile(filename string) (dataBytes []byte, err error) {
 		return nil, errors.New("failed to retrieve num chunks")
 	}
 
-	fileChunksBytes, err := filePointer.Keys.Decrypt(numChunksEncrypted)
-
+	var numChunks int
+	err = decryptToStruct(numChunksEncrypted, filePointer.Keys, &numChunks)
 	if err != nil {
 		return nil, err
 	}
-
-	var numChunks int
-	json.Unmarshal(fileChunksBytes, &numChunks)
 
 	fileData := []byte{}
 
@@ -666,14 +663,11 @@ func (u *User) ShareFile(filename string, recipient string) (
 		return uuid.Nil, errors.New("file not found")
 	}
 
-	fileMetaBytes, err := u.SymKeys.Decrypt(fileMetaEncrypted)
-
+	var fileMeta FileMeta
+	err = decryptToStruct(fileMetaEncrypted, u.SymKeys, &fileMeta)
 	if err != nil {
 		return uuid.Nil, err
 	}
-
-	var fileMeta FileMeta
-	json.Unmarshal(fileMetaBytes, &fileMeta)
 
 	// Revocation check
 	access, err := fileMeta.RevocationCheck(*u)
@@ -713,13 +707,11 @@ func (u *User) ShareFile(filename string, recipient string) (
 		return uuid.Nil, errors.New("cannot access file share hierarchy")
 	}
 
-	ourNodeBytes, err := fileMeta.NodePointer.Keys.Decrypt(ourNodeEncrypted)
-	if err != nil {
-		return uuid.Nil, errors.New("cannot decrypt file share hierarchy")
-	}
-
 	var ourNode FileNode
-	json.Unmarshal(ourNodeBytes, &ourNode)
+	err = decryptToStruct(ourNodeEncrypted, fileMeta.NodePointer.Keys, &ourNode)
+	if err != nil {
+		return uuid.Nil, err
+	}
 
 	ourNode.ChildPointers = append(ourNode.ChildPointers, Pointer{
 		ID:   childUUID,
@@ -799,14 +791,11 @@ func (u *User) ReceiveFile(filename string, sender string,
 		return err
 	}
 
-	fileMetaBytes, err := tempSymKey.Decrypt(accessTokenInfo.FileMetaCipher)
-
+	var fileMeta FileMeta
+	err = decryptToStruct(accessTokenInfo.FileMetaCipher, tempSymKey, &fileMeta)
 	if err != nil {
 		return err
 	}
-
-	var fileMeta FileMeta
-	json.Unmarshal(fileMetaBytes, &fileMeta)
 
 	// Update file directory entry for this user
 	fileMeta.Filename = filename
@@ -839,14 +828,11 @@ func (u *User) RevokeFile(filename string, targetUsername string) (err error) {
 		return errors.New("file not found")
 	}
 
-	fileMetaBytes, err := u.SymKeys.Decrypt(fileMetaEncrypted)
-
+	var fileMeta FileMeta
+	err = decryptToStruct(fileMetaEncrypted, u.SymKeys, &fileMeta)
 	if err != nil {
 		return err
 	}
-
-	var fileMeta FileMeta
-	json.Unmarshal(fileMetaBytes, &fileMeta)
 
 	// Revocation check
 	access, err := fileMeta.RevocationCheck(*u)
@@ -875,14 +861,11 @@ func (u *User) RevokeFile(filename string, targetUsername string) (err error) {
 		return errors.New("failed to retrieve num chunks")
 	}
 
-	fileChunksBytes, err := filePointer.Keys.Decrypt(numChunksEncrypted)
-
+	var numChunks int
+	err = decryptToStruct(numChunksEncrypted, filePointer.Keys, &numChunks)
 	if err != nil {
 		return err
 	}
-
-	var numChunks int
-	json.Unmarshal(fileChunksBytes, &numChunks)
 
 	// delete the old number of file chunks from the datastore
 	userlib.DatastoreDelete(fileChunksUUID)
@@ -967,13 +950,11 @@ func createRevocationNotice(
 		return false, errors.New("can't find file node")
 	}
 
-	fileNodeBytes, err := fileNodePointer.Keys.Decrypt(fileNodeEncrypted)
+	var fileNode FileNode
+	err := decryptToStruct(fileNodeEncrypted, fileNodePointer.Keys, &fileNode)
 	if err != nil {
 		return false, err
 	}
-
-	var fileNode FileNode
-	json.Unmarshal(fileNodeBytes, &fileNode)
 
 	// Check the user corresponding to this node should have access revoked
 	if fileNode.Username == revokedUsername {

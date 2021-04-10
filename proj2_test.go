@@ -251,3 +251,75 @@ func TestRevoke(t *testing.T) {
 		return
 	}
 }
+
+func TestRepeatInit(t *testing.T) {
+	clear()
+	_, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	_, err = InitUser("alice", "boo")
+	expectedError := "username already exists"
+
+	if err.Error() != expectedError {
+		t.Error("Initilized a duplicate user", err)
+		return
+	}
+}
+
+func TestGetUser(t *testing.T) {
+	clear()
+
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	u2, err := GetUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to get user", err)
+		return
+	}
+
+	if !reflect.DeepEqual(u1, u2) {
+		t.Error("Initialized and retrieved user are different", u1, u2)
+		return
+	}
+}
+
+func TestGetUserInvalidUsername(t *testing.T) {
+	clear()
+	_, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	u2, err := GetUser("bob", "fubar")
+
+	if u2 != nil {
+		t.Error("Grabbed a user with invalid username)", err)
+	}
+}
+
+func TestGetUserInvalidPassword(t *testing.T) {
+	clear()
+	_, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	u2, err := GetUser("alice", "boo")
+	if u2 != nil {
+		t.Error("Grabbed a user with invalid password", err)
+	}
+}
+
+func TestAppendInvalidFile(t *testing.T) {
+	clear()
+
+}
