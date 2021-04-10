@@ -6,8 +6,6 @@ package proj2
 // break the autograder and everyone will be sad.
 
 import (
-	"log"
-
 	"github.com/cs161-staff/userlib"
 
 	// The JSON library will be useful for serializing go structs.
@@ -327,15 +325,8 @@ func verifyKeypairs(pubks PubKeyset, privks PrivKeyset) bool {
 }
 
 func toUUID(obj interface{}) uuid.UUID {
-	marshalled, err := json.Marshal(obj)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	res, err := uuid.FromBytes(userlib.Hash(marshalled)[:16])
-	if err != nil {
-		log.Fatal(err)
-	}
+	marshalled, _ := json.Marshal(obj)
+	res, _ := uuid.FromBytes(userlib.Hash(marshalled)[:16])
 
 	return res
 }
