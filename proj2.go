@@ -438,6 +438,18 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 // StoreFile is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/storefile.html
 func (u *User) StoreFile(filename string, data []byte) (err error) {
+	// Check that filename doesn't already exist
+	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: filename,
+		UserSalt: u.UserSalt,
+	})
+
+	_, ok := userlib.DatastoreGet(fileDirectoryUUID)
+	if ok {
+		return errors.New("cannot StoreFile into name that already exists")
+	}
+
 	// Generate UUIDs and file keys
 	fileID := uuid.New()
 	nodeID := uuid.New()
@@ -495,13 +507,6 @@ func (u *User) StoreFile(filename string, data []byte) (err error) {
 	}
 
 	fileMetaEncrypted := encryptStruct(fileMeta, u.SymKeys)
-
-	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
-		Username: u.Username,
-		Filename: filename,
-		UserSalt: u.UserSalt,
-	})
-
 	userlib.DatastoreSet(fileDirectoryUUID, fileMetaEncrypted)
 
 	return nil
@@ -807,6 +812,12 @@ func (u *User) ReceiveFile(filename string, sender string,
 		Filename: filename,
 		UserSalt: u.UserSalt,
 	})
+
+	// Check filename doesn't already exist
+	_, ok = userlib.DatastoreGet(fileDirectoryUUID)
+	if ok {
+		return errors.New("cannot receive file into filename that already exists")
+	}
 
 	userlib.DatastoreSet(fileDirectoryUUID, fileMetaEncrypted)
 

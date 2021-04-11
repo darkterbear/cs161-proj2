@@ -65,6 +65,146 @@ func TestStorage(t *testing.T) {
 	}
 }
 
+func TestDuplicateStorage(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	err1 := u.StoreFile("file1", []byte("This is a test"))
+	err2 := u.StoreFile("file1", []byte("This is a different test"))
+
+	if !(err1 == nil && err2 != nil) {
+		t.Error("Failed to prevent duplicate file stores")
+		return
+	}
+}
+
+func TestTamperedFileDirectory(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	datastore := userlib.DatastoreGetMap()
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: "file1",
+		UserSalt: u.UserSalt,
+	})
+	datastore[fileDirectoryUUID][0] = 0
+
+	_, err2 := u.LoadFile("file1")
+	if err2 == nil {
+		t.Error("No error when accessing a file whose file directory entry has been tampered with", err2)
+		return
+	}
+}
+
+func TestTamperedFileData(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	datastore := userlib.DatastoreGetMap()
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: "file1",
+		UserSalt: u.UserSalt,
+	})
+
+	var fm FileMeta
+	decryptToStruct(datastore[fileDirectoryUUID], u.SymKeys, &fm)
+
+	datastore[toUUID(fm.FilePointer.ID)][0] = 0
+
+	_, err2 := u.LoadFile("file1")
+	if err2 == nil {
+		t.Error("No error when accessing a file whose file data has been tampered with", err2)
+		return
+	}
+}
+
+func TestTamperedFileData2(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	datastore := userlib.DatastoreGetMap()
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: "file1",
+		UserSalt: u.UserSalt,
+	})
+
+	var fm FileMeta
+	decryptToStruct(datastore[fileDirectoryUUID], u.SymKeys, &fm)
+
+	datastore[toUUID(FileChunkLocationParams{
+		FileID: fm.FilePointer.ID,
+		Chunk:  0,
+	})][0] = 0
+
+	_, err2 := u.LoadFile("file1")
+	if err2 == nil {
+		t.Error("No error when accessing a file whose file data has been tampered with", err2)
+		return
+	}
+}
+
+func TestAppendTamperedChunks(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	datastore := userlib.DatastoreGetMap()
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+		Username: u.Username,
+		Filename: "file1",
+		UserSalt: u.UserSalt,
+	})
+
+	var fm FileMeta
+	decryptToStruct(datastore[fileDirectoryUUID], u.SymKeys, &fm)
+
+	datastore[toUUID(fm.FilePointer.ID)][0] = 0
+
+	err = u.AppendFile("file1", []byte("This is another test"))
+	if err == nil {
+		t.Error("No error when apending to a file whose file chunk count data has been tampered with", err)
+		return
+	}
+}
+
 func TestInvalidFile(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
@@ -369,7 +509,27 @@ func TestGetUserInvalidPassword(t *testing.T) {
 		t.Error("Grabbed a user with invalid password", err)
 	}
 }
+func TestTamperedGetUser(t *testing.T) {
+	clear()
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
 
+	datastore := userlib.DatastoreGetMap()
+
+	privksUUID := toUUID(PrivKeyLocationParams{
+		Username: u1.Username,
+		UserSalt: u1.UserSalt,
+	})
+	datastore[privksUUID][0] = 0
+
+	_, err = GetUser("alice", "fubar")
+	if err == nil {
+		t.Error("GetUser succeeded on tampered private key storage", err)
+	}
+}
 func TestAppendInvalidFile(t *testing.T) {
 	clear()
 
@@ -385,4 +545,133 @@ func TestAppendInvalidFile(t *testing.T) {
 		t.Error("Unexpected error", err)
 		return
 	}
+}
+
+func TestShareInvalidFile(t *testing.T) {
+	clear()
+
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	_, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+
+	accessToken, err := u1.ShareFile("file", "bob")
+	expectedError := "file not found"
+
+	if accessToken != uuid.Nil {
+		t.Error("Access token created for invalid file", err)
+		return
+	} else if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
+		return
+	}
+}
+
+func TestShareInvalidRecipient(t *testing.T) {
+	clear()
+
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
+
+	accessToken, err := u1.ShareFile("file1", "bob")
+	expectedError := "cannot get recipient public key"
+
+	if accessToken != uuid.Nil {
+		t.Error("Access token created for invalid user", err)
+		return
+	} else if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
+		return
+	}
+}
+
+func TestShareTamperedHierarchy(t *testing.T) {
+	clear()
+
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
+
+	datastore := userlib.DatastoreGetMap()
+	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+		Username: u1.Username,
+		Filename: "file1",
+		UserSalt: u1.UserSalt,
+	})
+
+	var fm FileMeta
+	decryptToStruct(datastore[fileDirectoryUUID], u1.SymKeys, &fm)
+
+	datastore[fm.NodePointer.ID][0] = 0
+
+	_, err = u1.ShareFile("file1", "bob")
+
+	if err == nil {
+		t.Error("ShareFile succeeded on file where our hierarchy node was tampered with")
+		return
+	}
+}
+
+func TestReceiveInvalidUser(t *testing.T) {
+	clear()
+
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	u2 := new(User)
+
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
+
+	err = u2.ReceiveFile("file1", "alice", uuid.Nil)
+
+	expectedError := "invalid credentials"
+
+	if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
+		return
+	}
+}
+
+func TestReceiveInvalidSender(t *testing.T) {
+	// u1 := new(User)
+
+	// u, err := InitUser("alice", "fubar")
+	// if err != nil {
+	// 	t.Error("Failed to initialize user", err)
+	// 	return
+	// }
+
+	// v := []byte("This is a test")
+	// u.StoreFile("file1", v)
+
+	// err = u2.ReceiveFile("file1", "alice", uuid.Nil)
+
+	// expectedError := "invalid credentials"
+
+	// if err.Error() != expectedError {
+	// 	t.Error("Unexpected error", err)
+	// 	return
+	// }
 }
