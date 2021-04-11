@@ -129,35 +129,35 @@ func TestTamperedFile(t *testing.T) {
 	}
 }
 
-// func TestTamperedFileAppendage(t *testing.T) {
-// 	clear()
-// 	u, err := InitUser("alice", "fubar")
-// 	if err != nil {
-// 		t.Error("Failed to initialize user", err)
-// 		return
-// 	}
+func TestTamperedFileAppendage(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
 
-// 	v := []byte("This is a test")
-// 	u.StoreFile("file1", v)
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
 
-// 	datastore := userlib.DatastoreGetMap()
-// 	keyset1 := getKeyset(&datastore)
+	datastore := userlib.DatastoreGetMap()
+	keyset1 := getKeyset(&datastore)
 
-// 	u.AppendFile("file1", v)
+	u.AppendFile("file1", v)
 
-// 	keyset2 := getKeyset(&datastore)
-// 	diff := setDiff(&keyset2, &keyset1)
+	keyset2 := getKeyset(&datastore)
+	diff := setDiff(&keyset2, &keyset1)
 
-// 	for _, d := range diff {
-// 		datastore[d][0] = 0
-// 	}
+	for _, d := range diff {
+		datastore[d][0] = 0
+	}
 
-// 	_, err2 := u.LoadFile("file1")
-// 	if err2 == nil {
-// 		t.Error("No error when accessing a file whose appendage has been tampered with", err2)
-// 		return
-// 	}
-// }
+	_, err2 := u.LoadFile("file1")
+	if err2 == nil {
+		t.Error("No error when accessing a file whose appendage has been tampered with", err2)
+		return
+	}
+}
 
 func TestInvalidFile(t *testing.T) {
 	clear()
