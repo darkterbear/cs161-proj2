@@ -758,28 +758,6 @@ func TestRevokeInvalidFile(t *testing.T) {
 	}
 }
 
-// func TestRevokeInvalidTarget(t *testing.T) {
-// 	clear()
-
-// 	u1, err := InitUser("alice", "fubar")
-// 	if err != nil {
-// 		t.Error("Failed to initialize user", err)
-// 		return
-// 	}
-
-// 	v := []byte("This is a test")
-// 	u1.StoreFile("file1", v)
-
-// 	err = u1.RevokeFile("file1", "bob")
-
-// 	expectedError := "invalid credentials (targetUsername)"
-
-// 	if err.Error() != expectedError {
-// 		t.Error("Unexpected error", err)
-// 		return
-// 	}
-// }
-
 func TestDeepRevoke(t *testing.T) {
 	clear()
 
