@@ -384,7 +384,7 @@ func TestRevokeNonOwnedFile(t *testing.T) {
 	var accessToken uuid.UUID
 
 	// Test load file1
-	v, err = u.LoadFile("file1")
+	_, err = u.LoadFile("file1")
 	if err != nil {
 		t.Error("Failed to download the file from alice", err)
 		return
@@ -567,60 +567,60 @@ func TestShareInvalidRecipient(t *testing.T) {
 	}
 }
 
-// func TestMultipleShare(t *testing.T) {
-// 	clear()
+func TestMultipleShare(t *testing.T) {
+	clear()
 
-// 	u1, _ := InitUser("alice", "password1")
-// 	u2, _ := InitUser("bob", "password2")
-// 	u3, _ := InitUser("charlie", "password3")
+	u1, _ := InitUser("alice", "password1")
+	u2, _ := InitUser("bob", "password2")
+	u3, _ := InitUser("charlie", "password3")
 
-// 	v := []byte("This is a test")
-// 	u1.StoreFile("file1", v)
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
 
-// 	accessToken1, err := u1.ShareFile("file1", "bob")
-// 	if err != nil {
-// 		t.Error("Failed to share file", err)
-// 		return
-// 	}
+	accessToken1, err := u1.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share file", err)
+		return
+	}
 
-// 	err = u2.ReceiveFile("file2", "alice", accessToken1)
-// 	if err != nil {
-// 		t.Error("Failed to receive file", err)
-// 		return
-// 	}
+	err = u2.ReceiveFile("file2", "alice", accessToken1)
+	if err != nil {
+		t.Error("Failed to receive file", err)
+		return
+	}
 
-// 	v2, err2 := u2.LoadFile("file2")
-// 	if err2 != nil {
-// 		t.Error("Failed to upload and download", err2)
-// 		return
-// 	}
-// 	if !reflect.DeepEqual(v, v2) {
-// 		t.Error("Downloaded file is not the same", v, v2)
-// 		return
-// 	}
+	v2, err2 := u2.LoadFile("file2")
+	if err2 != nil {
+		t.Error("Failed to upload and download", err2)
+		return
+	}
+	if !reflect.DeepEqual(v, v2) {
+		t.Error("Downloaded file is not the same", v, v2)
+		return
+	}
 
-// 	accessToken2, _ := u2.ShareFile("file2", "charlie")
-// 	if err != nil {
-// 		t.Error("Failed to share file", err)
-// 		return
-// 	}
+	accessToken2, _ := u2.ShareFile("file2", "charlie")
+	if err != nil {
+		t.Error("Failed to share file", err)
+		return
+	}
 
-// 	err = u3.ReceiveFile("file3", "bob", accessToken2)
-// 	if err != nil {
-// 		t.Error("Failed to receive file", err)
-// 		return
-// 	}
+	err = u3.ReceiveFile("file3", "bob", accessToken2)
+	if err != nil {
+		t.Error("Failed to receive file", err)
+		return
+	}
 
-// 	v3, err3 := u3.LoadFile("file3")
-// 	if err3 != nil {
-// 		t.Error("Failed to upload and download", err3)
-// 		return
-// 	}
-// 	if !reflect.DeepEqual(v, v3) {
-// 		t.Error("Downloaded file is not the same", v, v3)
-// 		return
-// 	}
-// }
+	v3, err3 := u3.LoadFile("file3")
+	if err3 != nil {
+		t.Error("Failed to upload and download", err3)
+		return
+	}
+	if !reflect.DeepEqual(v, v3) {
+		t.Error("Downloaded file is not the same", v, v3)
+		return
+	}
+}
 
 func TestReceiveInvalidUser(t *testing.T) {
 	clear()
