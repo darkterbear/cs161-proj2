@@ -101,7 +101,7 @@ func TestDuplicateStorage(t *testing.T) {
 	}
 }
 
-func TestTamperedFileDirectory(t *testing.T) {
+func TestTamperedFile(t *testing.T) {
 	clear()
 	u, err := InitUser("alice", "fubar")
 	if err != nil {
@@ -125,6 +125,36 @@ func TestTamperedFileDirectory(t *testing.T) {
 	_, err2 := u.LoadFile("file1")
 	if err2 == nil {
 		t.Error("No error when accessing a file whose file directory entry has been tampered with", err2)
+		return
+	}
+}
+
+func TestTamperedFileAppendage(t *testing.T) {
+	clear()
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	datastore := userlib.DatastoreGetMap()
+	keyset1 := getKeyset(&datastore)
+
+	u.AppendFile("file1", v)
+
+	keyset2 := getKeyset(&datastore)
+	diff := setDiff(&keyset2, &keyset1)
+
+	for _, d := range diff {
+		datastore[d][0] = 0
+	}
+
+	_, err2 := u.LoadFile("file1")
+	if err2 == nil {
+		t.Error("No error when accessing a file whose appendage has been tampered with", err2)
 		return
 	}
 }
@@ -257,6 +287,13 @@ func TestRevoke(t *testing.T) {
 		return
 	}
 
+	// init Charlie
+	_, err3 := InitUser("charlie", "foobar")
+	if err3 != nil {
+		t.Error("Failed to initialize charlie", err3)
+		return
+	}
+
 	// Create and store file1
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
@@ -309,7 +346,14 @@ func TestRevoke(t *testing.T) {
 	}
 
 	// Bob should not be able to load file
-	_, err = u.LoadFile("file2")
+	_, err = u2.LoadFile("file2")
+	if err == nil {
+		t.Error("Bob should not be able to access file after being revoked by Alice", err)
+		return
+	}
+
+	// Bob should not be able to share the file after being revoked
+	_, err = u2.ShareFile("file2", "charlie")
 	if err == nil {
 		t.Error("Bob should not be able to access file after being revoked by Alice", err)
 		return
@@ -523,6 +567,61 @@ func TestShareInvalidRecipient(t *testing.T) {
 	}
 }
 
+func TestMultipleShare(t *testing.T) {
+	clear()
+
+	u1, _ := InitUser("alice", "password1")
+	u2, _ := InitUser("bob", "password2")
+	u3, _ := InitUser("charlie", "password3")
+
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
+
+	accessToken1, err := u1.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share file", err)
+		return
+	}
+
+	err = u2.ReceiveFile("file2", "alice", accessToken1)
+	if err != nil {
+		t.Error("Failed to receive file", err)
+		return
+	}
+
+	v2, err2 := u2.LoadFile("file2")
+	if err2 != nil {
+		t.Error("Failed to upload and download", err2)
+		return
+	}
+	if !reflect.DeepEqual(v, v2) {
+		t.Error("Downloaded file is not the same", v, v2)
+		return
+	}
+
+	accessToken2, _ := u2.ShareFile("file2", "charlie")
+	if err != nil {
+		t.Error("Failed to share file", err)
+		return
+	}
+
+	err = u3.ReceiveFile("file3", "bob", accessToken2)
+	if err != nil {
+		t.Error("Failed to receive file", err)
+		return
+	}
+
+	v3, err3 := u3.LoadFile("file3")
+	if err3 != nil {
+		t.Error("Failed to upload and download", err3)
+		return
+	}
+	if !reflect.DeepEqual(v, v3) {
+		t.Error("Downloaded file is not the same", v, v3)
+		return
+	}
+}
+
 func TestReceiveInvalidUser(t *testing.T) {
 	clear()
 
@@ -660,33 +759,105 @@ func TestRevokeInvalidFile(t *testing.T) {
 }
 
 func TestRevokeInvalidTarget(t *testing.T) {
-	// clear()
+	clear()
 
-	// u1, err := InitUser("alice", "fubar")
-	// if err != nil {
-	// 	t.Error("Failed to initialize user", err)
-	// 	return
-	// }
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
 
-	// u2, err2 := InitUser("bob", "foobar")
-	// if err2 != nil {
-	// 	t.Error("Failed to initialize bob", err2)
-	// 	return
-	// }
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
 
-	// v := []byte("This is a test")
-	// u1.StoreFile("file1", v)
+	err = u1.RevokeFile("file1", "bob")
 
-	// accessToken, _ := u1.ShareFile("file1", "bob")
+	expectedError := "invalid credentials (targetUsername)"
 
-	// _ = u2.ReceiveFile("file2", "alice", accessToken)
+	if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
+		return
+	}
+}
 
-	// err = u1.RevokeFile("bad", "bob")
+func TestDeepRevoke(t *testing.T) {
+	clear()
 
-	// expectedError := "file not found"
+	u1, _ := InitUser("alice", "password1")
+	u2, _ := InitUser("bob", "password2")
+	u3, _ := InitUser("charlie", "password3")
 
-	// if err.Error() != expectedError {
-	// 	t.Error("Unexpected error", err)
-	// 	return
-	// }
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
+
+	accessToken1, err := u1.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share file", err)
+		return
+	}
+
+	err = u2.ReceiveFile("file2", "alice", accessToken1)
+	if err != nil {
+		t.Error("Failed to receive file", err)
+		return
+	}
+
+	v2, err2 := u2.LoadFile("file2")
+	if err2 != nil {
+		t.Error("Failed to upload and download", err2)
+		return
+	}
+	if !reflect.DeepEqual(v, v2) {
+		t.Error("Downloaded file is not the same", v, v2)
+		return
+	}
+
+	accessToken2, _ := u2.ShareFile("file2", "charlie")
+	if err != nil {
+		t.Error("Failed to share file", err)
+		return
+	}
+
+	err = u3.ReceiveFile("file3", "bob", accessToken2)
+	if err != nil {
+		t.Error("Failed to receive file", err)
+		return
+	}
+
+	v3, err3 := u3.LoadFile("file3")
+	if err3 != nil {
+		t.Error("Failed to upload and download", err3)
+		return
+	}
+	if !reflect.DeepEqual(v, v3) {
+		t.Error("Downloaded file is not the same", v, v3)
+		return
+	}
+
+	err = u1.RevokeFile("file1", "bob")
+
+	if err != nil {
+		t.Error("Failed to revoke file", err)
+		return
+	}
+
+	_, err = u1.LoadFile("file1")
+	if err != nil {
+		t.Error("Failed to download the file from alice", err)
+		return
+	}
+
+	// Bob should not be able to load file
+	_, err = u2.LoadFile("file2")
+	if err == nil {
+		t.Error("Bob should not be able to access file after being revoked by Alice", err)
+		return
+	}
+
+	_, err = u3.LoadFile("file3")
+	if err == nil {
+		t.Error("Charlie should not be able to access file after being revoked by Alice", err)
+		return
+	}
+
 }

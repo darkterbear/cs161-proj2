@@ -827,6 +827,10 @@ func (u *User) ReceiveFile(filename string, sender string,
 // RevokeFile is documented at:
 // https://cs161.org/assets/projects/2/docs/client_api/revokefile.html
 func (u *User) RevokeFile(filename string, targetUsername string) (err error) {
+	if !userExists(targetUsername) {
+		return errors.New("invalid credentials (targetUsername)")
+	}
+
 	// Fetch file metadata
 	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
 		Username: u.Username,
