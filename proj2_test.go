@@ -252,6 +252,54 @@ func TestRevoke(t *testing.T) {
 	}
 }
 
+func TestRevokeNonOwnedFile(t *testing.T) {
+	clear()
+
+	// init Alice
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	// init Bob
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+
+	// Create and store file1
+	v := []byte("This is a test")
+	u.StoreFile("file1", v)
+
+	var accessToken uuid.UUID
+
+	// Test load file1
+	v, err = u.LoadFile("file1")
+	if err != nil {
+		t.Error("Failed to download the file from alice", err)
+		return
+	}
+
+	// Test share + receive actions
+	accessToken, err = u.ShareFile("file1", "bob")
+	if err != nil {
+		t.Error("Failed to share the a file", err)
+		return
+	}
+	err = u2.ReceiveFile("file2", "alice", accessToken)
+	if err != nil {
+		t.Error("Failed to receive the share message", err)
+		return
+	}
+
+	err = u2.RevokeFile("file2", "alice")
+	if err == nil {
+		t.Error("U2 was allowed to revoke a file owned by U1")
+	}
+}
+
 func TestRepeatInit(t *testing.T) {
 	clear()
 	_, err := InitUser("alice", "fubar")
@@ -260,11 +308,14 @@ func TestRepeatInit(t *testing.T) {
 		return
 	}
 
-	_, err = InitUser("alice", "boo")
+	u, err := InitUser("alice", "boo")
 	expectedError := "username already exists"
 
-	if err.Error() != expectedError {
+	if u != nil {
 		t.Error("Initilized a duplicate user", err)
+		return
+	} else if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
 		return
 	}
 }
@@ -322,4 +373,16 @@ func TestGetUserInvalidPassword(t *testing.T) {
 func TestAppendInvalidFile(t *testing.T) {
 	clear()
 
+	u, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+	err = u.AppendFile("file", nil)
+	expectedError := "file not found"
+
+	if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
+		return
+	}
 }
