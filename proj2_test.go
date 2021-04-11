@@ -5,6 +5,7 @@ package proj2
 
 import (
 	_ "encoding/hex"
+	"encoding/json"
 	_ "encoding/json"
 	_ "errors"
 	"reflect"
@@ -17,10 +18,45 @@ import (
 	_ "github.com/google/uuid"
 )
 
+type PrivKeyLocationParamsTesting struct {
+	Username string
+	UserSalt []byte
+}
+
+type FileMetaTesting struct {
+	Owner       string
+	Filename    string
+	FilePointer Pointer
+	NodePointer Pointer
+}
+
+type UserFileDirectoryParamsTesting struct {
+	Username string
+	Filename string
+	UserSalt []byte
+}
+
 func clear() {
 	// Wipes the storage so one test does not affect another
 	userlib.DatastoreClear()
 	userlib.KeystoreClear()
+}
+
+func toUUIDTesting(obj interface{}) uuid.UUID {
+	marshalled, _ := json.Marshal(obj)
+	res, _ := uuid.FromBytes(userlib.Hash(marshalled)[:16])
+
+	return res
+}
+
+func decryptToStructTesting(ciphertext []byte, symKeys SymKeyset, s interface{}) error {
+	plaintext, err := symKeys.Decrypt(ciphertext)
+	if err != nil {
+		return err
+	}
+
+	json.Unmarshal(plaintext, s)
+	return nil
 }
 
 func TestInit(t *testing.T) {
@@ -95,7 +131,7 @@ func TestTamperedFileDirectory(t *testing.T) {
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
 
-	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+	fileDirectoryUUID := toUUIDTesting(UserFileDirectoryParamsTesting{
 		Username: u.Username,
 		Filename: "file1",
 		UserSalt: u.UserSalt,
@@ -122,16 +158,16 @@ func TestTamperedFileData(t *testing.T) {
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
 
-	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+	fileDirectoryUUID := toUUIDTesting(UserFileDirectoryParamsTesting{
 		Username: u.Username,
 		Filename: "file1",
 		UserSalt: u.UserSalt,
 	})
 
-	var fm FileMeta
-	decryptToStruct(datastore[fileDirectoryUUID], u.SymKeys, &fm)
+	var fm FileMetaTesting
+	decryptToStructTesting(datastore[fileDirectoryUUID], u.SymKeys, &fm)
 
-	datastore[toUUID(fm.FilePointer.ID)][0] = 0
+	datastore[toUUIDTesting(fm.FilePointer.ID)][0] = 0
 
 	_, err2 := u.LoadFile("file1")
 	if err2 == nil {
@@ -153,16 +189,16 @@ func TestTamperedFileData2(t *testing.T) {
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
 
-	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+	fileDirectoryUUID := toUUIDTesting(UserFileDirectoryParamsTesting{
 		Username: u.Username,
 		Filename: "file1",
 		UserSalt: u.UserSalt,
 	})
 
-	var fm FileMeta
-	decryptToStruct(datastore[fileDirectoryUUID], u.SymKeys, &fm)
+	var fm FileMetaTesting
+	decryptToStructTesting(datastore[fileDirectoryUUID], u.SymKeys, &fm)
 
-	datastore[toUUID(FileChunkLocationParams{
+	datastore[toUUIDTesting(FileChunkLocationParams{
 		FileID: fm.FilePointer.ID,
 		Chunk:  0,
 	})][0] = 0
@@ -187,16 +223,16 @@ func TestAppendTamperedChunks(t *testing.T) {
 	v := []byte("This is a test")
 	u.StoreFile("file1", v)
 
-	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+	fileDirectoryUUID := toUUIDTesting(UserFileDirectoryParamsTesting{
 		Username: u.Username,
 		Filename: "file1",
 		UserSalt: u.UserSalt,
 	})
 
-	var fm FileMeta
-	decryptToStruct(datastore[fileDirectoryUUID], u.SymKeys, &fm)
+	var fm FileMetaTesting
+	decryptToStructTesting(datastore[fileDirectoryUUID], u.SymKeys, &fm)
 
-	datastore[toUUID(fm.FilePointer.ID)][0] = 0
+	datastore[toUUIDTesting(fm.FilePointer.ID)][0] = 0
 
 	err = u.AppendFile("file1", []byte("This is another test"))
 	if err == nil {
@@ -519,7 +555,7 @@ func TestTamperedGetUser(t *testing.T) {
 
 	datastore := userlib.DatastoreGetMap()
 
-	privksUUID := toUUID(PrivKeyLocationParams{
+	privksUUID := toUUIDTesting(PrivKeyLocationParamsTesting{
 		Username: u1.Username,
 		UserSalt: u1.UserSalt,
 	})
@@ -611,14 +647,14 @@ func TestShareTamperedHierarchy(t *testing.T) {
 	u1.StoreFile("file1", v)
 
 	datastore := userlib.DatastoreGetMap()
-	fileDirectoryUUID := toUUID(UserFileDirectoryParams{
+	fileDirectoryUUID := toUUIDTesting(UserFileDirectoryParamsTesting{
 		Username: u1.Username,
 		Filename: "file1",
 		UserSalt: u1.UserSalt,
 	})
 
-	var fm FileMeta
-	decryptToStruct(datastore[fileDirectoryUUID], u1.SymKeys, &fm)
+	var fm FileMetaTesting
+	decryptToStructTesting(datastore[fileDirectoryUUID], u1.SymKeys, &fm)
 
 	datastore[fm.NodePointer.ID][0] = 0
 
@@ -655,23 +691,81 @@ func TestReceiveInvalidUser(t *testing.T) {
 }
 
 func TestReceiveInvalidSender(t *testing.T) {
-	// u1 := new(User)
+	clear()
 
-	// u, err := InitUser("alice", "fubar")
-	// if err != nil {
-	// 	t.Error("Failed to initialize user", err)
-	// 	return
-	// }
+	u2, err := InitUser("bob", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
 
-	// v := []byte("This is a test")
-	// u.StoreFile("file1", v)
+	err = u2.ReceiveFile("file1", "alice", uuid.Nil)
 
-	// err = u2.ReceiveFile("file1", "alice", uuid.Nil)
+	expectedError := "cannot get verification key for file owner to verify revocation notice"
 
-	// expectedError := "invalid credentials"
+	if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
+		return
+	}
+}
 
-	// if err.Error() != expectedError {
-	// 	t.Error("Unexpected error", err)
-	// 	return
-	// }
+func TestReceiveInvalidAccessToken(t *testing.T) {
+	clear()
+
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
+
+	u1.ShareFile("file1", "bob")
+
+	err = u2.ReceiveFile("file1", "alice", uuid.Nil)
+
+	expectedError := "failed to retrive access token info"
+
+	if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
+		return
+	}
+}
+
+func TestReceiverDuplicateFile(t *testing.T) {
+	clear()
+
+	u1, err := InitUser("alice", "fubar")
+	if err != nil {
+		t.Error("Failed to initialize user", err)
+		return
+	}
+
+	u2, err2 := InitUser("bob", "foobar")
+	if err2 != nil {
+		t.Error("Failed to initialize bob", err2)
+		return
+	}
+
+	v := []byte("This is a test")
+	u1.StoreFile("file1", v)
+	u2.StoreFile("file2", v)
+
+	accessToken, _ := u1.ShareFile("file1", "bob")
+
+	err = u2.ReceiveFile("file2", "alice", accessToken)
+
+	expectedError := "cannot receive file into filename that already exists"
+
+	if err.Error() != expectedError {
+		t.Error("Unexpected error", err)
+		return
+	}
 }
