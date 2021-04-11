@@ -18,6 +18,16 @@ import (
 	_ "github.com/google/uuid"
 )
 
+type SymKeysetTest struct {
+	EKey []byte // Encryption key
+	MKey []byte // MAC key
+}
+
+type PointerTest struct {
+	ID   userlib.UUID
+	Keys SymKeysetTest
+}
+
 type PrivKeyLocationParamsTesting struct {
 	Username string
 	UserSalt []byte
@@ -26,8 +36,8 @@ type PrivKeyLocationParamsTesting struct {
 type FileMetaTesting struct {
 	Owner       string
 	Filename    string
-	FilePointer Pointer
-	NodePointer Pointer
+	FilePointer PointerTest
+	NodePointer PointerTest
 }
 
 type UserFileDirectoryParamsTesting struct {
